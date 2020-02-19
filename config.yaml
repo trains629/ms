@@ -1,0 +1,13 @@
+services:
+  postgresql: # conn 
+    dbname: biger
+    user: biger
+    password: hao123456789
+    sslmode: disable
+    host: git.trains629.com
+  nsq:
+    host: git.trains629.com
+    port: 4161
+  redis:
+    host: git.trains629.com
+    port: 6379

@@ -40,9 +40,25 @@
 
 需要将整个日志操作封装成对象，在服务启动的时候去执行初始化操作，然后返回的是zerolog的对象，使用这个对象去进行日志添加。在初始化的时候如果没有设置elasticsearch，那么就不需要将日志添加到elasticsearch中。
 
+先将消息发送到消息队列，之前测试elasticsearch的时候一直没办法插入数据。
+
 #### 数据库
 
 封装一个postgresql的操作对象，通过数据库连接参数去建立连接，使用默认的数据库操作对象去执行数据库操作。
+
+```sql
+CREATE TABLE IF NOT EXISTS public.dict_en(
+  id serial PRIMARY KEY,
+  word text NOT NULL,
+  pronunciation text[] NOT NULL,
+  paraphrase text[] NOT NULL,
+  rank text,
+  pattern text,
+  sentence jsonb,
+  createtime timestamp without time zone NOT NULL DEFAULT LOCALTIMESTAMP,
+  updatetime timestamp without time zone NOT NULL DEFAULT now()
+)
+```
 
 #### 消息队列
 
@@ -54,10 +70,41 @@
 
 ### 初始化工具 init
 
-这个部分是独立的工具，负责向配置中心写入目标数据库，日志服务，消息队列地址。然后还有在数据库中创建数据表，此服务在第三方服务启动之后运行。就是这样不算是一个理想的方式，对于数据表的创建最好还是应该在词条入库中完成。或者是此工具结束后去调用词条读取工具。
+这个部分是独立的工具，负责向配置中心写入目标数据库，日志服务，消息队列地址。
+
+将数据写入etcd的服务中，需要写入以下服务：
+
+1. postgresql
+2. nsq
+
+这样准备先将信息写到yml的配置文件中，然后使用etcd接口读取。
+按服务名称读取服务列表中的服务，然后将信息以json串形式写入etcd中。
+
+之前使用的`google.golang.org/grpc v1.27.1 // indirect`，结果一直报错，这个项目是新创建的，之前在其他库中一直都是正常的，经过对比正常的库是`google.golang.org/grpc v1.25.1 // indirect`,在go.mod中将这个库替换为低版本就可以正常运行。
+
+```
+go run ./main.go                                                 
+# github.com/coreos/etcd/clientv3/balancer/picker
+../../go/pkg/mod/github.com/coreos/etcd@v3.3.18+incompatible/clientv3/balancer/picker/err.go:37:44: undefined: balancer.PickOptions
+../../go/pkg/mod/github.com/coreos/etcd@v3.3.18+incompatible/clientv3/balancer/picker/roundrobin_balanced.go:55:54: undefined: balancer.PickOptions
+# github.com/coreos/etcd/clientv3/balancer/resolver/endpoint
+../../go/pkg/mod/github.com/coreos/etcd@v3.3.18+incompatible/clientv3/balancer/resolver/endpoint/endpoint.go:114:78: undefined: resolver.BuildOption
+../../go/pkg/mod/github.com/coreos/etcd@v3.3.18+incompatible/clientv3/balancer/resolver/endpoint/endpoint.go:182:31: undefined: resolver.ResolveNowOption
+
+```
  
 ### 词条读取 reader 
 
 ### 词条入库服务 writer
 
-启动后一直监听目标主题，等有数据进来进执行操作，按nsq的数据流转方式，在一个频道下的消费者不会被发送相同的消息，这样只要词条读取不重复，这里应该也不会重复
+启动后先从etcd中读取数据库，消息队列信息，如果没有读取到etcd，重复执行3次检查，无效就结束当前应用。如果能读取到，分别去尝试连接消息队列和数据库，如果都不能连接也结束当前应用。正常之后应该将自己注册到etcd上，这样可以放便其他应用知道当前服务是否可用。
+
+连接正常之后，检查是否创建数据表，如果没有创建先创建，然后一直监听目标主题，当有消息进来，执行入库操作。按nsq的数据流转方式，在一个频道下的消费者不会被发送相同的消息，这样只要词条读取不重复，这里应该也不会重复。
+
+所有的数据都是通过etcd的配置中读取的，需要访问的服务名称都是固定，这样只需要传递etcd的服务地址。
+
+
+
+## ServiceConfig
+
+终于算是构建了一个基本的etcd读取对象，可以读取更新和读取etcd中的数据，接下来可以继续完成整个微服务框架的构建了。
