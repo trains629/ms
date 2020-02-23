@@ -1,11 +1,15 @@
 package base
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
+	"log"
 	"regexp"
 	"strconv"
 	"strings"
+
+	"go.etcd.io/etcd/clientv3"
 )
 
 // ServicePrefix 默认前缀
@@ -175,4 +179,17 @@ name1:
 	result.Prefix = strings.Join(list[0:start], "/")
 end1:
 	return result
+}
+
+// ReadServiceInfo 读取服务信息
+func ReadServiceInfo(ctx context.Context, cli *clientv3.Client, name string) *ServiceConfig {
+	conf := NewServiceConfig(name)
+	ll, err := GetServiceList(ctx, cli, conf, 2) // 返回两条
+	if err != nil || len(ll) <= 0 {
+		return nil
+	}
+
+	val := ll[0]
+	log.Println(val, val.Info)
+	return val
 }
