@@ -73,10 +73,8 @@ func publish(nsq *base.ServiceConfig, topic string, dict *Dict) error {
 			if err = n.Publish(topic, bb); err != nil {
 				log.Println(70, err, val)
 			}
-			return
 		}
 	})
-
 	end := time.Now().Sub(start)
 	log.Println("结束时间", err, end)
 	return err

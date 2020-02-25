@@ -22,7 +22,7 @@ func newWriterService(topic string) *base.ServiceConfig {
 	}
 }
 
-func consumer(ctx context.Context, nsqConf *base.ServiceConfig, post *WriterHandler, topic string) error {
+func consumer(ctx context.Context, nsqConf *base.ServiceConfig, post Handler, topic string) error {
 	if nsqConf == nil {
 		return fmt.Errorf("error: %s", "nsq nil")
 	}
@@ -48,9 +48,8 @@ func consumer(ctx context.Context, nsqConf *base.ServiceConfig, post *WriterHand
 }
 
 func initService(ctx context.Context, cli *clientv3.Client, topic string) error {
-	// 需要读取两个服务的数据
 	ctx1, cancel := context.WithTimeout(ctx, 2*time.Second)
-	var post *WriterHandler
+	var post Handler
 	var nsq *base.ServiceConfig
 	var err error
 	go func() {
@@ -69,7 +68,6 @@ func initService(ctx context.Context, cli *clientv3.Client, topic string) error 
 			return ctx1.Err()
 		}
 	}
-	log.Println(108, err)
 	if err != nil {
 		return err
 	}

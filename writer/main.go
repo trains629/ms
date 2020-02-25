@@ -13,7 +13,7 @@ import (
 )
 
 func getEndpoints() []string {
-	result := os.Args[1:]
+	result := flag.Args() //os.Args[1:]
 	if len(result) <= 0 {
 		return []string{"localhost:2379", "localhost:22379", "localhost:32379"}
 	}

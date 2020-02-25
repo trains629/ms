@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"log"
 	"strings"
+	"sync"
+	"time"
 
 	"database/sql"
 
@@ -14,37 +16,92 @@ import (
 	//yaml8 "sigs.k8s.io/yaml"
 )
 
+type Handler interface {
+	nsq.Handler
+	Close() error
+}
+
 type WriterHandler struct {
-	db  *sql.DB
-	cli *clientv3.Client
+	db     *sql.DB
+	cli    *clientv3.Client
+	count  int
+	tx     *sql.Tx
+	ctx    context.Context
+	cancel context.CancelFunc
+	mx     *sync.Mutex
+}
+
+/**
+使用事物去提交数据，不按条添加，增加一个计数器，
+计数器为0的时候初始化，开始事物，初始化超时context，2秒内没有数据进来提交当前事物
+计数满10个或者2秒内没有数据就提交事物
+*/
+
+func (w *WriterHandler) init() {
+	log.Println("初始化")
+	var err error
+	w.tx, err = w.db.Begin()
+	if err != nil {
+		return
+	}
+	w.tx.Exec("")
+
+	w.ctx, w.cancel = context.WithTimeout(context.Background(), 1*time.Second)
+	go func() {
+		select {
+		case <-w.ctx.Done():
+			// 超时或计数满10
+			log.Println(48, w.ctx.Err())
+			if w.ctx.Err() == context.DeadlineExceeded {
+				log.Println("超时结束")
+			}
+			w.mx.Lock()
+			if w.tx != nil {
+				log.Println("提交", w.count)
+				w.tx.Commit()
+			}
+			w.count = 0
+			w.mx.Unlock()
+		}
+		log.Println("结束循环")
+	}()
+}
+
+const WriterHandlerLen = 40
+
+func (w *WriterHandler) start() {
+	w.mx.Lock()
+	if w.count <= 0 {
+		w.init()
+	}
+	w.count++
+	w.mx.Unlock()
+}
+
+func (w *WriterHandler) stop() {
+	w.mx.Lock()
+	if w.count > WriterHandlerLen {
+		w.cancel()
+	}
+	w.mx.Unlock()
+}
+
+func (w *WriterHandler) insert(body []byte) {
+	w.start()
+	en := NewENWord(body)
+	if w.tx == nil || en == nil {
+		return
+	}
+	en.Insert(w.tx)
+	w.stop()
 }
 
 func (w *WriterHandler) HandleMessage(m *nsq.Message) error {
-	if len(m.Body) == 0 {
-		return nil
+	if len(m.Body) > 0 {
+		w.insert(m.Body)
 	}
-	// 插数据的时候需要使用事物，从消息队列中攒够十条一组去发送，
-	// 然后在增加超时context，超时的时候就将攒的数据都发送
-	// 然后再启动多个当前的服务
-	if en := NewENWord(m.Body); en != nil {
-		en.Insert(w.db)
-	}
-	// Returning a non-nil error will automatically send a REQ command to NSQ to re-queue the message.
 	return nil
 }
-
-// TableSQL 建表语句
-const TableSQL = `CREATE TABLE IF NOT EXISTS public.dict_en(
-  id serial PRIMARY KEY,
-  word text NOT NULL,
-  pronunciation text[] NOT NULL,
-  paraphrase text[] NOT NULL,
-  rank text,
-  pattern text,
-  sentence jsonb,
-  createtime timestamp without time zone NOT NULL DEFAULT LOCALTIMESTAMP,
-  updatetime timestamp without time zone NOT NULL DEFAULT now()
-)`
 
 func (w *WriterHandler) createTable() error {
 	/**
@@ -59,10 +116,11 @@ func (w *WriterHandler) createTable() error {
 }
 
 // Close 关闭连接
-func (w *WriterHandler) Close() {
+func (w *WriterHandler) Close() error {
 	if w.db != nil {
-		w.db.Close()
+		return w.db.Close()
 	}
+	return nil
 }
 
 type postConfig struct {
@@ -111,7 +169,7 @@ func (pc *postConfig) Open() (*sql.DB, error) {
 }
 
 // NewPostgresHandler 创建postgresql对象
-func NewPostgresHandler(ctx context.Context, cli *clientv3.Client) (*WriterHandler, error) {
+func NewPostgresHandler(ctx context.Context, cli *clientv3.Client) (Handler, error) {
 	conf := base.ReadServiceInfo(ctx, cli, "postgresql")
 	if conf == nil {
 		return nil, fmt.Errorf("error: %s", "post nil")
@@ -124,12 +182,15 @@ func NewPostgresHandler(ctx context.Context, cli *clientv3.Client) (*WriterHandl
 	if err != nil {
 		return nil, err
 	}
+	return NewWriterHandler(db, cli)
+}
 
-	wr := &WriterHandler{db, cli}
+// NewWriterHandler 创建回调
+func NewWriterHandler(db *sql.DB, cli *clientv3.Client) (Handler, error) {
+	wr := &WriterHandler{db: db, cli: cli, mx: &sync.Mutex{}}
+	// 检查数据表是否创建
 	if err := wr.createTable(); err != nil {
 		return nil, err
 	}
-
-	// 检查数据表是否创建
 	return wr, nil
 }
