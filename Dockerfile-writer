@@ -1,0 +1,28 @@
+# 使用容器进行编译
+FROM golang:latest AS build
+
+RUN mkdir -p /go/src/github.com/trains629/ms/base \
+  && mkdir -p /go/src/github.com/trains629/ms/writer
+COPY ./base   /go/src/github.com/trains629/ms/base/
+COPY ./writer /go/src/github.com/trains629/ms/writer/
+COPY ./go.mod /go/src/github.com/trains629/ms/
+COPY ./go.sum /go/src/github.com/trains629/ms/
+
+WORKDIR  /go/src/github.com/trains629/ms/writer
+
+RUN export GO111MODULE=on \
+  && export GOPROXY=https://goproxy.cn \
+  && CGO_ENABLED=0 go build -o ../writer -ldflags="-s -w"  
+
+FROM alpine:3.11
+
+COPY --from=build /go/src/github.com/trains629/ms/writer/writer /usr/local/bin/
+
+# Alpine Linux doesn't use pam, which means that there is no /etc/nsswitch.conf,
+# but Golang relies on /etc/nsswitch.conf to check the order of DNS resolving
+# (see https://github.com/golang/go/commit/9dee7771f561cf6aee081c0af6658cc81fac3918)
+# To fix this we just create /etc/nsswitch.conf and add the following line:
+RUN echo 'hosts: files mdns4_minimal [NOTFOUND=return] dns mdns4' >> /etc/nsswitch.conf
+
+# Define default command.
+CMD ["/usr/local/bin/writer"]
