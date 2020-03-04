@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"log"
 	"regexp"
 	"strconv"
 	"strings"
@@ -143,6 +142,23 @@ func (sc *ServiceConfig) parseHost(host string) {
 	}
 }
 
+// GetInfoValue 返回info.value
+func (sc *ServiceConfig) GetInfoValue() interface{} {
+	info, ok := sc.Info.(map[string]interface{})
+	if !ok {
+		return nil
+	}
+	value, ok := info["value"]
+	if !ok || value == nil {
+		return nil
+	}
+	val, ok := value.(map[string]interface{})
+	if !ok {
+		return value
+	}
+	return val
+}
+
 // NewServiceConfig 新建服务配置信息
 func NewServiceConfig(name string) *ServiceConfig {
 	return &ServiceConfig{
@@ -188,8 +204,6 @@ func ReadServiceInfo(ctx context.Context, cli *clientv3.Client, name string) *Se
 	if err != nil || len(ll) <= 0 {
 		return nil
 	}
-
 	val := ll[0]
-	log.Println(val, val.Info)
 	return val
 }

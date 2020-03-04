@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log"
 	"time"
 
 	"go.etcd.io/etcd/clientv3"
@@ -21,7 +22,7 @@ type ServiceReg struct {
 }
 
 func (sr *ServiceReg) keepAlive(leaseID clientv3.LeaseID) error {
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(sr.ctx)
 	resp, err := sr.cli.Lease.KeepAlive(ctx, leaseID)
 	defer func() {
 		cancel()
@@ -38,7 +39,7 @@ func (sr *ServiceReg) keepAlive(leaseID clientv3.LeaseID) error {
 			}
 		case stop := <-sr.stop:
 			if stop {
-				sr.cli.Lease.Revoke(context.Background(), leaseID)
+				sr.cli.Lease.Revoke(sr.ctx, leaseID)
 				return nil
 			}
 		case <-sr.cli.Ctx().Done():
@@ -51,25 +52,66 @@ func (sr *ServiceReg) keepAlive(leaseID clientv3.LeaseID) error {
 	}
 }
 
+type timeoutFunc func(context.Context) (interface{}, error)
+
+func funcWitchTimeout(ctx1 context.Context, fun1 timeoutFunc) (interface{}, error) {
+	ctx, cancel := context.WithTimeout(ctx1, 2*time.Second)
+	result, err := fun1(ctx)
+	cancel()
+	// 返回的err会有3种情况:
+	// 1. Canceled 未超时手动取消
+	// 2. DeadlineExceeded 超时，需要重新执行，或者返回错误
+	// 3. 其他的错误，直接返回错误
+	log.Println(65, err, result)
+	defer log.Println(66, err, result)
+	if err == nil {
+		return result, err
+	}
+	if err == context.Canceled {
+		return result, nil
+	} else if err == context.DeadlineExceeded {
+		// 超时,在这里增加控制，可以让函数重新执行
+	}
+	return nil, err
+}
+
 func (sr *ServiceReg) putGrant(key string, val string, ttl int64) (clientv3.LeaseID, error) {
-	lease, err := sr.cli.Lease.Grant(context.Background(), ttl)
+	rr, err := funcWitchTimeout(sr.ctx, func(ctx context.Context) (interface{}, error) {
+		return sr.cli.Lease.Grant(ctx, ttl)
+	})
+
 	if err != nil {
+		sr.leaseID = 0
 		return 0, err
 	}
+	lease := rr.(*clientv3.LeaseGrantResponse)
 	sr.leaseID = lease.ID
-	_, err = sr.cli.Put(context.Background(), key, val,
-		clientv3.WithLease(lease.ID))
+	_, err = sr.put(key, val, clientv3.WithLease(lease.ID))
 	return lease.ID, err
+}
+
+func (sr *ServiceReg) put(key, val string, opts ...clientv3.OpOption) (*clientv3.PutResponse, error) {
+	rr, err := funcWitchTimeout(sr.ctx, func(ctx context.Context) (interface{}, error) {
+		return sr.cli.Put(ctx, key, val, opts...)
+	})
+	if err != nil {
+		return nil, err
+	}
+	resp := rr.(*clientv3.PutResponse)
+	return resp, err
 }
 
 // Start 启动服务
 func (sr *ServiceReg) Start() error {
+	log.Println(68, 68)
 	key := sr.config.GetKey()
 	if key == "" {
 		return fmt.Errorf("error: %s", "key is empty")
 	}
 	ttl := sr.ttl
 	val := sr.config.GetValueString()
+	// 使用etcd都需要增加超时判断吗？
+
 	var err error
 	if ttl > 0 {
 		id, err := sr.putGrant(key, val, ttl)
@@ -78,7 +120,9 @@ func (sr *ServiceReg) Start() error {
 		}
 		return sr.keepAlive(id)
 	}
-	_, err = sr.cli.Put(context.Background(), key, val)
+	log.Println(83838, val)
+	_, err = sr.put(key, val)
+	log.Println(85, err)
 	return err
 }
 
@@ -124,7 +168,11 @@ func GetServiceList(ctx context.Context, cli *clientv3.Client,
 	if limit > 0 {
 		opts = append(opts, clientv3.WithLimit(limit))
 	}
-	resp, err := cli.Get(ctx, key+"/", opts...)
+
+	rr, err := funcWitchTimeout(ctx, func(ctx context.Context) (interface{}, error) {
+		return cli.Get(ctx, key+"/", opts...)
+	})
+	resp := rr.(*clientv3.GetResponse)
 	if err != nil {
 		return nil, err
 	}
