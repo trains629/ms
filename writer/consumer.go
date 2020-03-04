@@ -2,13 +2,21 @@ package main
 
 import (
 	"context"
-	"fmt"
+	"errors"
+	"flag"
+	"io"
 	"log"
-	"time"
 
 	"github.com/trains629/ms/base"
 	"go.etcd.io/etcd/clientv3"
-	//yaml8 "sigs.k8s.io/yaml"
+)
+
+var (
+	_name    = flag.String("name", "writer", "service name")
+	_host    = flag.String("host", "127.0.0.1", "host")
+	_port    = flag.Int64("port", 8051, "port")
+	_version = flag.String("version", "v1", "version")
+	_channel = flag.String("channel", "writer", "channel")
 )
 
 func newWriterService(topic string) *base.ServiceConfig {
@@ -24,52 +32,64 @@ func newWriterService(topic string) *base.ServiceConfig {
 
 func consumer(ctx context.Context, nsqConf *base.ServiceConfig, post Handler, topic string) error {
 	if nsqConf == nil {
-		return fmt.Errorf("error: %s", "nsq nil")
+		return errors.New("error: nsq nil")
 	}
 
 	if post == nil {
-		return fmt.Errorf("error: %s", "post nil")
+		return errors.New("error: post nil")
 	}
-	consumer1, err := base.NewConsumer(topic, "writer")
+	consumer1, err := base.NewConsumer(topic, *_channel)
 	if err != nil {
 		return err
 	}
 
 	consumer1.AddHandler(post)
-	consumer1.ConnectToNSQLookupd(nsqConf.GetAddr())
+	if err := consumer1.ConnectToNSQLookupd(nsqConf.GetAddr()); err != nil {
+		log.Println(499, err)
+		return err
+	}
 	select {
 	case <-consumer1.StopChan:
-		post.Close()
 	case <-ctx.Done():
 		consumer1.Stop()
-		post.Close()
 	}
-	return fmt.Errorf("error: %s", "nsq stop")
+	post.(io.Closer).Close()
+	return nil
 }
 
 func initService(ctx context.Context, cli *clientv3.Client, topic string) error {
-	ctx1, cancel := context.WithTimeout(ctx, 2*time.Second)
-	var post Handler
 	var nsq *base.ServiceConfig
-	var err error
-	go func() {
-		defer cancel()
-		nsq = base.ReadServiceInfo(ctx1, cli, "nsq")
-		if nsq == nil {
-			err = fmt.Errorf("error: %s", "nsq nil")
-			return
-		}
-		post, err = NewPostgresHandler(ctx, cli)
-		log.Println("结束")
-	}()
-	select {
-	case <-ctx1.Done():
-		if ctx1.Err() != context.Canceled {
-			return ctx1.Err()
-		}
+	if ok := base.CheckFunc(ctx, 3, func() bool {
+		nsq = base.ReadServiceInfo(ctx, cli, "nsq")
+		return nsq != nil
+	}); !ok {
+		return errors.New("do not connected nsq")
 	}
+	post, err := NewPostgresHandler(ctx, cli)
 	if err != nil {
 		return err
 	}
 	return consumer(ctx, nsq, post, topic)
+}
+
+func run(runner *base.Runner) error {
+	topic := *_name
+	// 应该先等消息队列可以使用，再执行后面的操作
+	// 检查三次消息队列是否存在
+	go func() {
+		err := initService(runner.Ctx, runner.Cli, topic)
+		if err != nil {
+			log.Println(944, err)
+			runner.Cancel()
+		}
+	}()
+	// reader向topic为主题的频道发消息
+	go func(service *base.ServiceConfig) {
+		err := base.RegisterService(runner.Ctx, runner.Cli, service, 10)
+		if err != nil {
+			log.Println(102, err)
+			runner.Cancel()
+		}
+	}(newWriterService(topic))
+	return nil
 }

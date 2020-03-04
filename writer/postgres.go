@@ -13,12 +13,11 @@ import (
 	"github.com/nsqio/go-nsq"
 	"github.com/trains629/ms/base"
 	"go.etcd.io/etcd/clientv3"
-	//yaml8 "sigs.k8s.io/yaml"
 )
 
 type Handler interface {
 	nsq.Handler
-	Close() error
+	//Close() error
 }
 
 type WriterHandler struct {
@@ -30,12 +29,6 @@ type WriterHandler struct {
 	cancel context.CancelFunc
 	mx     *sync.Mutex
 }
-
-/**
-使用事物去提交数据，不按条添加，增加一个计数器，
-计数器为0的时候初始化，开始事物，初始化超时context，2秒内没有数据进来提交当前事物
-计数满10个或者2秒内没有数据就提交事物
-*/
 
 func (w *WriterHandler) init() {
 	log.Println("初始化")
@@ -67,7 +60,7 @@ func (w *WriterHandler) init() {
 	}()
 }
 
-const WriterHandlerLen = 40
+const WriterHandlerLen = 100
 
 func (w *WriterHandler) start() {
 	w.mx.Lock()
