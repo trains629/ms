@@ -6,6 +6,7 @@ import (
 	"flag"
 	"io"
 	"log"
+	"os"
 
 	"github.com/trains629/ms/base"
 	"go.etcd.io/etcd/clientv3"
@@ -13,18 +14,27 @@ import (
 
 var (
 	_name    = flag.String("name", "writer", "service name")
-	_host    = flag.String("host", "127.0.0.1", "host")
+	_host    = flag.String("host", "", "address of this writer node, (default to the OS hostname)")
 	_port    = flag.Int64("port", 8051, "port")
 	_version = flag.String("version", "v1", "version")
 	_channel = flag.String("channel", "writer", "channel")
 )
 
 func newWriterService(topic string) *base.ServiceConfig {
+
+	host := *_host
+	if host == "" {
+		var err error
+		if host, err = os.Hostname(); err != nil {
+			return nil
+		}
+	}
+
 	return &base.ServiceConfig{
 		Name:    *_name,
 		Prefix:  base.ServicePrefix,
 		Version: *_version,
-		Host:    *_host,
+		Host:    host,
 		Port:    *_port,
 		Info:    map[string]string{"topic": topic},
 	}
@@ -60,7 +70,7 @@ func consumer(ctx context.Context, nsqConf *base.ServiceConfig, post Handler, to
 func initService(ctx context.Context, cli *clientv3.Client, topic string) error {
 	var nsq *base.ServiceConfig
 	if ok := base.CheckFunc(ctx, 3, func() bool {
-		nsq = base.ReadServiceInfo(ctx, cli, "nsq")
+		nsq = base.ReadServiceInfo(ctx, cli, "nsqlookupd")
 		return nsq != nil
 	}); !ok {
 		return errors.New("do not connected nsq")
@@ -85,6 +95,10 @@ func run(runner *base.Runner) error {
 	}()
 	// reader向topic为主题的频道发消息
 	go func(service *base.ServiceConfig) {
+		if service == nil {
+			runner.Cancel()
+			return
+		}
 		err := base.RegisterService(runner.Ctx, runner.Cli, service, 10)
 		if err != nil {
 			log.Println(102, err)

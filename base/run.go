@@ -44,7 +44,7 @@ func (r *Runner) Run(fun RunEtcdFunc) error {
 }
 
 var (
-	_timeout   = flag.Int64("ttl", int64(2*time.Second), "timeout")
+	_timeout   *int64 //= flag.Int64("ttl", int64(2*time.Second), "timeout")
 	_Endpoints = StringArray{}
 )
 
@@ -70,7 +70,8 @@ func checkETCDService() bool {
 
 // NewEtcdRunner 创建运行器
 func NewEtcdRunner() (*Runner, error) {
-	flag.Var(&_Endpoints, "end-points", "endpoint")
+	_timeout = flag.Int64("ttl", int64(2*time.Second), "timeout")
+	flag.Var(&_Endpoints, "endpoints", "endpoint")
 	flag.Parse()
 	cli, err := NewEtcdClient([]string(_Endpoints), time.Duration(*_timeout))
 	if err != nil {

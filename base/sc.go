@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log"
 	"regexp"
 	"strconv"
 	"strings"
@@ -201,6 +202,7 @@ end1:
 func ReadServiceInfo(ctx context.Context, cli *clientv3.Client, name string) *ServiceConfig {
 	conf := NewServiceConfig(name)
 	ll, err := GetServiceList(ctx, cli, conf, 2) // 返回两条
+	log.Println(205, err)
 	if err != nil || len(ll) <= 0 {
 		return nil
 	}
